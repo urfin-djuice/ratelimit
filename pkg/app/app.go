@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bufio"
 	"fmt"
 	"github.com/urfin-djuice/ratelimit/pkg/params"
 	"os"
@@ -14,10 +15,11 @@ import (
 
 // Application application struct
 type Application struct {
-	Rate         int
-	Inflight     int
-	Command      string
-	stopSig      chan bool
+	Rate        int
+	Inflight    int
+	Command     string
+	stopSig     chan bool
+	inputStream chan string
 }
 
 // NewApplication create new application
@@ -34,8 +36,18 @@ func NewApplication() (*Application, error) {
 // Run run application
 func (a *Application) Run() chan bool {
 	a.stopSig = make(chan bool)
+	go a.reader()
 	go a.run()
 	return a.stopSig
+}
+
+func (a *Application) reader() {
+	scanner := bufio.NewScanner(os.Stdin)
+	a.inputStream = make(chan string, a.Inflight)
+	for scanner.Scan() {
+		a.inputStream <- scanner.Text()
+	}
+	close(a.inputStream)
 }
 
 func (a *Application) run() {
@@ -43,7 +55,7 @@ func (a *Application) run() {
 	signal.Notify(sigc, syscall.SIGTERM, syscall.SIGQUIT)
 	var wg sync.WaitGroup
 	wg.Add(a.Inflight)
-	for i:=1; i <= a.Inflight; i++ {
+	for i := 1; i <= a.Inflight; i++ {
 		go func() {
 			defer wg.Done()
 			t := time.NewTimer(0)
@@ -53,9 +65,8 @@ func (a *Application) run() {
 					return
 				case <-t.C:
 					for i := 1; i <= a.Rate; i++ {
-						var s string
-						_, _ = fmt.Scanln(&s)
-						if s == "" {
+						s, isOpen := <- a.inputStream
+						if !isOpen {
 							return
 						}
 						go a.process(s)
